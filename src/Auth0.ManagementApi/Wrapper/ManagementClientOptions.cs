@@ -17,11 +17,11 @@ public class ManagementClientOptions
     public string? Token { get; init; }
 
     /// <summary>
-    /// A function that returns an access token.
+    /// An implementation of <see cref="ITokenProvider"/>
     /// Useful for dynamic token retrieval from external sources.
     /// Either Token/TokenProvider or ClientId+ClientSecret must be provided.
     /// </summary>
-    public Func<string>? TokenProvider { get; init; }
+    public ITokenProvider? TokenProvider { get; init; }
 
     /// <summary>
     /// Your Auth0 application client ID.

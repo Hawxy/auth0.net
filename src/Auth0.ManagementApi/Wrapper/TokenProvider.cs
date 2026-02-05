@@ -9,7 +9,7 @@ namespace Auth0.ManagementApi;
 /// until they expire (with a 10-second leeway for safety).
 /// Thread-safe: uses a lock to prevent concurrent token fetches.
 /// </summary>
-internal sealed class TokenProvider
+internal sealed class TokenProvider : ITokenProvider
 {
     private readonly string _domain;
     private readonly string _clientId;
@@ -20,7 +20,7 @@ internal sealed class TokenProvider
 
     private string? _accessToken;
     private DateTime _expiresAt = DateTime.MinValue;
-    private readonly object _lock = new();
+    private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1);
 
     private const int LeewaySeconds = 10;
 
@@ -48,37 +48,10 @@ internal sealed class TokenProvider
     }
 
     /// <summary>
-    /// Gets a valid access token, fetching a new one if expired.
-    /// Thread-safe with double-check locking pattern.
-    /// </summary>
-    /// <returns>A valid access token.</returns>
-    public string GetToken()
-    {
-        // Fast path: return cached token if still valid
-        if (_accessToken != null && DateTime.UtcNow < _expiresAt.AddSeconds(-LeewaySeconds))
-        {
-            return _accessToken;
-        }
-
-        lock (_lock)
-        {
-            // Double-check after acquiring lock
-            if (_accessToken != null && DateTime.UtcNow < _expiresAt.AddSeconds(-LeewaySeconds))
-            {
-                return _accessToken;
-            }
-
-            FetchToken();
-        }
-
-        return _accessToken!;
-    }
-
-    /// <summary>
     /// Fetches a new token via client credentials grant.
     /// Must be called while holding the lock.
     /// </summary>
-    private void FetchToken()
+    private async Task FetchToken()
     {
         var url = $"https://{_domain}/oauth/token";
         var content = new FormUrlEncodedContent(new Dictionary<string, string>
@@ -89,11 +62,11 @@ internal sealed class TokenProvider
             ["audience"] = _audience
         });
 
-        using var response = _httpClient.PostAsync(url, content).GetAwaiter().GetResult();
+        using var response = await _httpClient.PostAsync(url, content);
         response.EnsureSuccessStatusCode();
 
-        var json = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-        using var document = JsonDocument.Parse(json);
+        var json = await response.Content.ReadAsStreamAsync();
+        using var document = await JsonDocument.ParseAsync(json);
         var root = document.RootElement;
 
         _accessToken = root.GetProperty("access_token").GetString()
@@ -101,5 +74,39 @@ internal sealed class TokenProvider
 
         var expiresIn = root.GetProperty("expires_in").GetInt32();
         _expiresAt = DateTime.UtcNow.AddSeconds(expiresIn);
+    }
+    
+    /// <summary>
+    /// Gets a valid access token, fetching a new one if expired.
+    /// Thread-safe with double-check locking pattern.
+    /// </summary>
+    /// <returns>A valid access token.</returns>
+
+    public async ValueTask<string> GetTokenAsync()
+    {
+        // Fast path: return cached token if still valid
+        if (_accessToken != null && DateTime.UtcNow < _expiresAt.AddSeconds(-LeewaySeconds))
+        {
+            return _accessToken;
+        }
+
+        await _semaphore.WaitAsync();
+
+        try
+        {
+            // Double-check after acquiring lock
+            if (_accessToken != null && DateTime.UtcNow < _expiresAt.AddSeconds(-LeewaySeconds))
+            {
+                return _accessToken;
+            }
+
+            await FetchToken();
+        }
+        finally
+        {
+            _semaphore.Release(); 
+        }
+
+        return _accessToken!;
     }
 }

@@ -72,7 +72,7 @@ public sealed class ManagementClient : IDisposable
         });
 
         // Add Authorization header with token supplier (supports Func<string>)
-        Func<string> authHeaderSupplier = () => $"Bearer {tokenSupplier()}";
+        Func<ValueTask<string>> authHeaderSupplier = async () => $"Bearer {await tokenSupplier()}";
         headers["Authorization"] = authHeaderSupplier;
 
         // Add any additional headers
@@ -163,19 +163,19 @@ public sealed class ManagementClient : IDisposable
         }
     }
 
-    private static Func<string> CreateTokenSupplier(ManagementClientOptions options)
+    private static Func<ValueTask<string>> CreateTokenSupplier(ManagementClientOptions options)
     {
         // If a token provider function is provided, use it
         if (options.TokenProvider != null)
         {
-            return options.TokenProvider;
+            return options.TokenProvider.GetTokenAsync;
         }
 
         // If a static token is provided, return it
         if (options.Token != null)
         {
             var token = options.Token;
-            return () => token;
+            return () => new ValueTask<string>(token);
         }
 
         // Otherwise, create a TokenProvider for client credentials
@@ -186,7 +186,7 @@ public sealed class ManagementClient : IDisposable
             audience: options.Audience,
             httpClient: options.HttpClient);
 
-        return tokenProvider.GetToken;
+        return tokenProvider.GetTokenAsync;
     }
 
     /// <summary>Actions management.</summary>
